@@ -11,6 +11,7 @@ type NodeBase = {
   source: string;
   val: number;
   preview: string;
+  text?: string;  // full chunk content (from brain_export.md); entities don't have it
 };
 
 type ChunkNode = NodeBase & {
@@ -79,6 +80,48 @@ export default function App() {
       .then((g) => setGraph(g))
       .catch((e) => setErr(String(e)));
   }, []);
+
+  // Auto-select from URL hash: open /index.html#chunk:abc123-0
+  useEffect(() => {
+    const tryHashSelect = () => {
+      const id = decodeURIComponent(window.location.hash.replace(/^#/, ""));
+      if (!id) return;
+      if (!graph) return false;
+      const node = graph.nodes.find((n) => n.id === id || n.id.endsWith(id));
+      if (node) {
+        setSelected(node);
+        return true;
+      }
+      return false;
+    };
+    const onHash = () => { tryHashSelect(); };
+    window.addEventListener("hashchange", onHash);
+    // Try now; if graph not ready, also try again whenever graph changes
+    tryHashSelect();
+    return () => window.removeEventListener("hashchange", onHash);
+  }, [graph]);
+
+  // When graph first arrives, also retry hash selection (covers initial load race)
+  useEffect(() => {
+    if (!graph) return;
+    const id = decodeURIComponent(window.location.hash.replace(/^#/, ""));
+    if (!id || selected) return;
+    const node = graph.nodes.find((n) => n.id === id || n.id.endsWith(id));
+    if (node) setSelected(node);
+  }, [graph]);
+
+  // Esc to close the inspector
+  useEffect(() => {
+    if (!selected) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setSelected(null);
+        window.history.replaceState(null, "", window.location.pathname);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [selected]);
 
   // Filter nodes by tier + entities + search
   const filtered = useMemo(() => {
@@ -280,6 +323,20 @@ const toggleTier = (t: string) => {
         onNodeClick={(n: any) => {
           setSelected(n as GraphNode);
           navigator.clipboard?.writeText(n.id).catch(() => {});
+          // Update URL hash so the selection is shareable / bookmarkable
+          window.history.replaceState(null, "", `#${n.id}`);
+          // Camera focus: only if the node has a 3D position
+          const dist = 220;
+          const pos = (n.x !== undefined && n.y !== undefined && n.z !== undefined)
+            ? { x: n.x, y: n.y, z: n.z }
+            : null;
+          if (pos) {
+            fgRef.current?.cameraPosition(
+              { x: pos.x + dist, y: pos.y + dist * 0.3, z: pos.z + dist },
+              n,
+              1200,
+            );
+          }
         }}
         cooldownTicks={0}
         warmupTicks={0}
@@ -287,59 +344,15 @@ const toggleTier = (t: string) => {
         enableNodeDrag={false}
         enablePointerInteraction
         showNavInfo={false}
+        onBackgroundClick={() => {
+          setSelected(null);
+          window.history.replaceState(null, "", window.location.pathname);
+        }}
       />
 
-      {/* bottom-right: hover or selected-node panel */}
+      {/* bottom-right: hover info */}
       <div className="hud hud-br">
-        {selected ? (
-          <>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <div className="hover-tier" style={{ color: selected.color }}>
-                {selected.kind === "entity"
-                  ? `🏷️ ${ENTITY_LABEL[(selected as EntityNode).entityKind] ?? "Entity"} · ${selected.name}`
-                  : `${TIER_LABEL[(selected as ChunkNode).tier] ?? (selected as ChunkNode).tier} · importance ${(selected as ChunkNode).importance.toFixed(2)}`}
-              </div>
-              <button
-                onClick={() => setSelected(null)}
-                style={{ background: "transparent", border: "none", color: "var(--text-dim)", cursor: "pointer", fontSize: "1rem", padding: 0 }}
-                title="close"
-              >×</button>
-            </div>
-            <div className="hover-id">{selected.id}</div>
-            <div className="hover-src">{selected.source || "—"}</div>
-            <div className="hover-preview">{selected.preview}</div>
-            <div className="hud-divider" />
-            <div className="hud-foot">
-              <b>{neighbors.length}</b> neighbor{neighbors.length === 1 ? "" : "s"}
-            </div>
-            {neighbors.map(({ node, edge, sim }) => (
-              <div
-                key={node.id}
-                onClick={() => setSelected(node)}
-                style={{
-                  borderLeft: `2px solid ${node.color}`,
-                  padding: "4px 8px",
-                  marginTop: 4,
-                  cursor: "pointer",
-                  background: "rgba(255,255,255,0.02)",
-                  borderRadius: 3,
-                  fontSize: "0.7rem",
-                  fontFamily: "var(--font-mono)",
-                  lineHeight: 1.4,
-                }}
-                title={node.preview}
-              >
-                <span style={{ color: node.color }}>
-                  {node.kind === "entity" ? "🏷️ " : ""}{node.name}
-                </span>
-                {" "}
-                <span style={{ opacity: 0.6 }}>
-                  {edge.label || edge.kind}
-                </span>
-              </div>
-            ))}
-          </>
-        ) : hover ? (
+        {hover ? (
           <>
             <div className="hover-tier" style={{ color: hover.color }}>
               {hover.kind === "entity"
@@ -350,13 +363,106 @@ const toggleTier = (t: string) => {
             <div className="hover-src">{hover.source || "—"}</div>
             <div className="hover-preview">{hover.preview}</div>
             <div className="hud-foot" style={{ marginTop: 8 }}>
-              <em>click to inspect neighbors</em>
+              <em>click to inspect</em>
             </div>
           </>
         ) : (
-          <div className="hover-empty">hover a node · click to recall</div>
+          <div className="hover-empty">hover a node · click to inspect</div>
         )}
       </div>
+
+      {/* Click-to-inspect modal: opens when a node is clicked.
+          Shows full chunk text + clickable neighbors list. */}
+      {selected && (
+        <div
+          className="inspector-backdrop"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setSelected(null);
+          }}
+        >
+          <div className="inspector">
+            <div className="inspector-head">
+              <div className="hover-tier" style={{ color: selected.color, fontSize: "1rem" }}>
+                {selected.kind === "entity"
+                  ? `🏷️ ${ENTITY_LABEL[(selected as EntityNode).entityKind] ?? "Entity"} · ${selected.name}`
+                  : `${TIER_LABEL[(selected as ChunkNode).tier] ?? (selected as ChunkNode).tier} · importance ${(selected as ChunkNode).importance.toFixed(2)}`}
+              </div>
+              <button
+                className="inspector-close"
+                onClick={() => {
+                  setSelected(null);
+                  window.history.replaceState(null, "", window.location.pathname);
+                }}
+                title="close (esc)"
+              >×</button>
+            </div>
+
+            <div className="inspector-meta">
+              <div><b>id:</b> <code>{selected.id}</code></div>
+              <div><b>source:</b> {selected.source || "—"}</div>
+            </div>
+
+            <div className="hud-divider" />
+
+            {/* Full chunk text — what brain_recall would return for this id */}
+            <div className="inspector-text">
+              {selected.kind === "chunk" && selected.text ? (
+                <>
+                  <div className="inspector-section-label">FULL CONTENT ({selected.text.length.toLocaleString()} chars)</div>
+                  <pre>{selected.text}</pre>
+                </>
+              ) : selected.kind === "entity" ? (
+                <>
+                  <div className="inspector-section-label">ENTITY</div>
+                  <p style={{ color: "var(--text-dim)", fontStyle: "italic" }}>
+                    Entities are nodes in the brain's knowledge graph.<br/>
+                    They don't have raw chunk content — they're abstractions over multiple chunks.<br/>
+                    Inspect neighbors below to see the chunks that touch this entity.
+                  </p>
+                </>
+              ) : (
+                <p style={{ color: "var(--text-dim)" }}>{selected.preview}</p>
+              )}
+            </div>
+
+            <div className="hud-divider" />
+
+            {/* Neighbors list — recursive drill-in */}
+            <div className="inspector-neighbors">
+              <div className="inspector-section-label">
+                {neighbors.length} NEIGHBOR{neighbors.length === 1 ? "" : "S"}
+              </div>
+              {neighbors.length === 0 ? (
+                <div className="inspector-empty">no edges — isolated node</div>
+              ) : (
+                neighbors.map(({ node, edge, sim }) => (
+                  <div
+                    key={node.id}
+                    className="inspector-neighbor-row"
+                    onClick={() => setSelected(node)}
+                    title={node.preview}
+                  >
+                    <span className="inspector-neighbor-dot" style={{ background: node.color }} />
+                    <span style={{ color: node.color, flex: 1 }}>
+                      {node.kind === "entity" ? "🏷️ " : ""}{node.name}
+                    </span>
+                    <span className="inspector-neighbor-edge">
+                      {edge.label || edge.kind || "edge"}
+                    </span>
+                    {sim !== undefined && (
+                      <span className="inspector-neighbor-sim">{Math.round(sim * 100)}%</span>
+                    )}
+                  </div>
+                ))
+              )}
+            </div>
+
+            <div className="inspector-foot">
+              press <kbd>esc</kbd> to close · click neighbor to drill in
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

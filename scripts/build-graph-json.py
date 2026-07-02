@@ -116,6 +116,7 @@ def chunks_to_nodes(chunks: list[dict]) -> list[dict]:
             "source": c["source"],
             "val": max(0.5, min(c["importance"] * 2.5, 12)),
             "preview": preview,
+            "text": text,  # full content — used by click-to-inspect modal
         })
     return nodes
 
