@@ -59,6 +59,128 @@ const ENTITY_LABEL: Record<string, string> = {
   file: "File",
 };
 
+// ── Live Kanban ────────────────────────────────────────────────────────────────
+// Auto-refreshes from /api/kanban every 2s. The agent (DuckBot) and any other
+// process can POST to /api/kanban/append to add a card. State file:
+// ~/.openclaw/workspace/state/kanban.json (trimmed to last 50).
+type KanbanTask = {
+  id: string;
+  title: string;
+  source: string;
+  status: "todo" | "doing" | "done" | "failed";
+  created: string;
+  updated: string;
+  note?: string;
+};
+
+function formatAgo(iso: string): string {
+  if (!iso) return "";
+  const t = Date.parse(iso);
+  if (isNaN(t)) return iso;
+  const secs = Math.max(0, Math.round((Date.now() - t) / 1000));
+  if (secs < 60) return `${secs}s ago`;
+  if (secs < 3600) return `${Math.round(secs / 60)}m ago`;
+  if (secs < 86400) return `${Math.round(secs / 3600)}h ago`;
+  return `${Math.round(secs / 86400)}d ago`;
+}
+
+function KanbanBoard() {
+  const [tasks, setTasks] = useState<KanbanTask[]>([]);
+  const [updated, setUpdated] = useState<string>("");
+  const [polling, setPolling] = useState<boolean>(true);
+  const [err, setErr] = useState<string | null>(null);
+
+  const fetch_ = async () => {
+    try {
+      const r = await fetch("/api/kanban", { cache: "no-store" });
+      if (!r.ok) throw new Error(`status ${r.status}`);
+      const data = await r.json();
+      setTasks(data.tasks || []);
+      setUpdated(data.updated || "");
+      setErr(null);
+    } catch (e: any) {
+      setErr(String(e?.message || e));
+    }
+  };
+
+  useEffect(() => {
+    fetch_();
+    if (!polling) return;
+    const id = setInterval(fetch_, 2000);
+    return () => clearInterval(id);
+  }, [polling]);
+
+  const cols: { status: KanbanTask["status"]; icon: string; label: string }[] = [
+    { status: "todo",   icon: "📌", label: "Todo"   },
+    { status: "doing",  icon: "🔄", label: "Doing"  },
+    { status: "done",   icon: "✅", label: "Done"   },
+    { status: "failed", icon: "❌", label: "Failed" },
+  ];
+
+  const byStatus = (s: KanbanTask["status"]) =>
+    tasks
+      .filter((t) => t.status === s)
+      .sort((a, b) => (b.updated || "").localeCompare(a.updated || ""));
+
+  return (
+    <div className="kanban-root">
+      <div className="kanban-toolbar">
+        <span className="kanban-toolbar-title">
+          📋 Live Kanban <span style={{ opacity: 0.5, fontWeight: 400 }}>· agent activity stream</span>
+        </span>
+        <span className="kanban-toolbar-info">
+          {tasks.length} task{tasks.length === 1 ? "" : "s"}
+          {updated ? ` · updated ${formatAgo(updated)}` : ""}
+          {err ? <span style={{ color: "#fca5a5" }}> · error: {err}</span> : null}
+        </span>
+        <span className="kanban-spacer" />
+        <button
+          className="kanban-btn"
+          onClick={() => setPolling((p) => !p)}
+          title={polling ? "Pause auto-refresh" : "Resume auto-refresh"}
+        >
+          {polling ? "⏸ pause" : "▶ resume"}
+        </button>
+        <button className="kanban-btn" onClick={fetch_} title="Refresh now">
+          🔄 refresh
+        </button>
+      </div>
+      <div className="kanban-cols">
+        {cols.map((c) => {
+          const list = byStatus(c.status);
+          return (
+            <div key={c.status} className={`kanban-col kanban-col-${c.status}`}>
+              <div className="kanban-col-head">
+                <span>{c.icon} {c.label}</span>
+                <span className="kanban-count">{list.length}</span>
+              </div>
+              <div className="kanban-cards">
+                {list.length === 0 ? (
+                  <div className="kanban-empty">(none)</div>
+                ) : (
+                  list.map((t) => (
+                    <div key={t.id} className={`kanban-card kanban-card-${t.status}`}>
+                      <div className="kanban-card-title">{t.title}</div>
+                      {t.note ? <div className="kanban-card-note">{t.note}</div> : null}
+                      <div className="kanban-card-meta">
+                        <span className="kanban-card-source">{t.source || "agent"}</span>
+                        <span className="kanban-card-age" title={t.updated}>{formatAgo(t.updated || t.created)}</span>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <div className="kanban-foot">
+        POST a card: <code>curl -X POST http://127.0.0.1:5173/api/kanban/append -H 'Content-Type: application/json' -d '{`{"task":{"title":"…","status":"doing"}}`}'</code>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const [graph, setGraph] = useState<Graph | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -69,6 +191,7 @@ export default function App() {
   const [hover, setHover] = useState<GraphNode | null>(null);
   const [search, setSearch] = useState("");
   const [viewMode, setViewMode] = useState<"all" | "connected" | "entities">("connected");
+  const [displayMode, setDisplayMode] = useState<"3d" | "kanban">("3d");
   const [selected, setSelected] = useState<GraphNode | null>(null);
   // Hide chunks that have no edges. Default ON because at 3,700+ chunks the
   // isolated ones pile into a dense sphere with no visible structure.
@@ -300,6 +423,26 @@ const toggleTier = (t: string) => {
         </button>
         <div className="hud-divider" />
         <div className="view-mode-row">
+          <span className="view-mode-label">Display</span>
+          <div className="segmented">
+            <button
+              className={`seg ${displayMode === "3d" ? "on" : ""}`}
+              onClick={() => setDisplayMode("3d")}
+              title="3D knowledge graph"
+            >
+              🌐 3D
+            </button>
+            <button
+              className={`seg ${displayMode === "kanban" ? "on" : ""}`}
+              onClick={() => setDisplayMode("kanban")}
+              title="Live agent task board (auto-refresh 2s)"
+            >
+              📋 Kanban
+            </button>
+          </div>
+        </div>
+        <div className="hud-divider" />
+        <div className="view-mode-row">
           <span className="view-mode-label">View</span>
           <div className="segmented">
             <button
@@ -339,8 +482,9 @@ const toggleTier = (t: string) => {
         </div>
       </div>
 
-      {/* 3D graph */}
-      <ForceGraph3D
+      {/* Display: 3D graph OR Kanban view */}
+      {displayMode === "3d" ? (
+        <ForceGraph3D
         ref={fgRef}
         graphData={filtered}
         backgroundColor="#050810"
@@ -399,6 +543,9 @@ const toggleTier = (t: string) => {
           window.history.replaceState(null, "", window.location.pathname);
         }}
       />
+      ) : (
+        <KanbanBoard />
+      )}
 
       {/* bottom-right: hover info */}
       <div className="hud hud-br">
