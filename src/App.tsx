@@ -68,10 +68,11 @@ export default function App() {
   const [showEntities, setShowEntities] = useState(true);
   const [hover, setHover] = useState<GraphNode | null>(null);
   const [search, setSearch] = useState("");
+  const [viewMode, setViewMode] = useState<"all" | "connected" | "entities">("connected");
   const [selected, setSelected] = useState<GraphNode | null>(null);
   // Hide chunks that have no edges. Default ON because at 3,700+ chunks the
   // isolated ones pile into a dense sphere with no visible structure.
-  const [hideIsolated, setHideIsolated] = useState(true);
+  
   const fgRef = useRef<any>(null);
 
   useEffect(() => {
@@ -126,51 +127,50 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, [selected]);
 
-  // Filter nodes by tier + entities + search + hide-isolated
+  // Filter nodes by tier + entities + search + viewMode
   const filtered = useMemo(() => {
     if (!graph) return null;
     const q = search.trim().toLowerCase();
-    const nodes = graph.nodes.filter((n) => {
+    // First apply tier/entity toggle
+    let nodes = graph.nodes.filter((n) => {
       const isEntity = n.kind === "entity";
       if (isEntity && !showEntities) return false;
       if (!isEntity) {
         const cn = n as ChunkNode;
         if (!activeTiers.has(cn.tier)) return false;
       }
-      if (q === "") return true;
-      return (
+      return true;
+    });
+    // ViewMode: entities-only → keep just entities
+    if (viewMode === "entities") {
+      nodes = nodes.filter((n) => n.kind === "entity");
+    } else if (viewMode === "connected") {
+      // Drop chunk nodes that have no edges (isolated chunks pile into a ball)
+      const keepIds = new Set<string>();
+      for (const l of graph.links) {
+        const s = typeof l.source === "string" ? l.source : (l.source as any).id;
+        const t = typeof l.target === "string" ? l.target : (l.target as any).id;
+        keepIds.add(s); keepIds.add(t);
+      }
+      nodes = nodes.filter((n) => n.kind === "entity" || keepIds.has(n.id));
+    }
+    // Search
+    if (q !== "") {
+      nodes = nodes.filter((n) =>
         n.preview.toLowerCase().includes(q) ||
         n.source.toLowerCase().includes(q) ||
         n.id.toLowerCase().includes(q) ||
         n.name.toLowerCase().includes(q)
       );
-    });
+    }
     // Only keep links whose endpoints are in the filtered set
     const keepIds = new Set(nodes.map((n) => n.id));
     const links = graph.links.filter(
       (l) => keepIds.has(typeof l.source === "string" ? l.source : (l.source as any).id)
         && keepIds.has(typeof l.target === "string" ? l.target : (l.target as any).id),
     );
-    // Hide-isolated: drop chunk nodes that have no edges (entity nodes always kept)
-    let connectedIds = keepIds;
-    if (hideIsolated) {
-      connectedIds = new Set<string>();
-      for (const l of links) {
-        const sid = typeof l.source === "string" ? l.source : (l.source as any).id;
-        const tid = typeof l.target === "string" ? l.target : (l.target as any).id;
-        connectedIds.add(sid);
-        connectedIds.add(tid);
-      }
-      // always keep entity nodes
-      for (const n of nodes) if (n.kind === "entity") connectedIds.add(n.id);
-    }
-    const finalNodes = nodes.filter((n) => connectedIds.has(n.id));
-    const finalLinks = links.filter(
-      (l) => connectedIds.has(typeof l.source === "string" ? l.source : (l.source as any).id)
-        && connectedIds.has(typeof l.target === "string" ? l.target : (l.target as any).id),
-    );
-    return { nodes: finalNodes, links: finalLinks };
-  }, [graph, activeTiers, showEntities, search, hideIsolated]);
+    return { nodes, links };
+  }, [graph, activeTiers, showEntities, search, viewMode]);
 
   const stats = useMemo(() => {
     if (!graph) return null;
@@ -298,16 +298,34 @@ const toggleTier = (t: string) => {
           <span className="tier-dot" style={{ background: "#fb7185" }} />
           Entities <span className="tier-count">{stats.entities.toLocaleString()}</span>
         </button>
-        <button
-          className={`tier-chip ${hideIsolated ? "on" : "off"}`}
-          style={{ borderColor: "#a78bfa" }}
-          onClick={() => setHideIsolated((v) => !v)}
-          title="Hide chunk nodes that have NO edges (clearer viz)"
-        >
-          <span className="tier-dot" style={{ background: "#a78bfa" }} />
-          Connected only
-        </button>
         <div className="hud-divider" />
+        <div className="view-mode-row">
+          <span className="view-mode-label">View</span>
+          <div className="segmented">
+            <button
+              className={`seg ${viewMode === "connected" ? "on" : ""}`}
+              onClick={() => setViewMode("connected")}
+              title="Chunks with edges + all entities (recommended)"
+            >
+              Connected
+            </button>
+            <button
+              className={`seg ${viewMode === "all" ? "on" : ""}`}
+              onClick={() => setViewMode("all")}
+              title="Everything, no filter"
+            >
+              All
+            </button>
+            <button
+              className={`seg ${viewMode === "entities" ? "on" : ""}`}
+              onClick={() => setViewMode("entities")}
+              title="23-entity knowledge graph only"
+            >
+              Graph
+            </button>
+          </div>
+        </div>
+
         <input
           className="search"
           type="search"
