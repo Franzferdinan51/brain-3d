@@ -67,6 +67,7 @@ export default function App() {
   const [showEntities, setShowEntities] = useState(true);
   const [hover, setHover] = useState<GraphNode | null>(null);
   const [search, setSearch] = useState("");
+  const [selected, setSelected] = useState<GraphNode | null>(null);
   const fgRef = useRef<any>(null);
 
   useEffect(() => {
@@ -118,7 +119,40 @@ export default function App() {
     return { total: graph.nodes.length, byTier, entities: ent };
   }, [graph]);
 
-  const toggleTier = (t: string) => {
+  // Compute neighbors of `selected` node (any link where source or target matches)
+const neighbors = useMemo(() => {
+  if (!selected || !filtered) return [];
+  const sid = selected.id;
+  const out: { node: GraphNode; edge: Link; sim?: number }[] = [];
+  const seenNodeIds = new Set<string>();
+  for (const l of filtered.links) {
+    const srcId = typeof l.source === "string" ? l.source : (l.source as any).id;
+    const tgtId = typeof l.target === "string" ? l.target : (l.target as any).id;
+    let otherId: string | null = null;
+    if (srcId === sid) otherId = tgtId;
+    else if (tgtId === sid) otherId = srcId;
+    if (!otherId || seenNodeIds.has(otherId)) continue;
+    const node = filtered.nodes.find((n) => n.id === otherId);
+    if (!node) continue;
+    seenNodeIds.add(otherId);
+    let sim: number | undefined;
+    if (l.kind === "similarity-edge" && l.label) {
+      const m = l.label.match(/[\d.]+/);
+      if (m) sim = parseFloat(m[0]);
+    }
+    out.push({ node, edge: l, sim });
+  }
+  // Sort: similarity edges first, by sim desc; then entity edges by label
+  out.sort((a, b) => {
+    if (a.sim !== undefined && b.sim !== undefined) return b.sim - a.sim;
+    if (a.sim !== undefined) return -1;
+    if (b.sim !== undefined) return 1;
+    return (a.edge.label || "").localeCompare(b.edge.label || "");
+  });
+  return out.slice(0, 12);  // top 12 neighbors
+}, [selected, filtered]);
+
+const toggleTier = (t: string) => {
     setActiveTiers((prev) => {
       const next = new Set(prev);
       next.has(t) ? next.delete(t) : next.add(t);
@@ -228,16 +262,24 @@ export default function App() {
         }
         nodeOpacity={0.9}
         linkColor={(l: any) => l.color || "rgba(148,163,184,0.25)"}
-        linkWidth={0.5}
+        linkWidth={(l: any) => {
+          // Similarity edges thicker for stronger relationships; entity edges fixed
+          if (l.kind === "similarity-edge") {
+            const sim = parseFloat((l.label || "").replace(/[^\d.]/g, "")) || 0.5;
+            return 0.3 + (sim - 0.5) * 1.5;
+          }
+          return 0.8;  // entity edges a bit thicker
+        }}
+        linkDirectionalParticles={(l: any) =>
+          l.kind === "similarity-edge" ? 1 : 0
+        }
+        linkDirectionalParticleWidth={1.5}
+        linkDirectionalParticleColor={() => "rgba(34, 211, 238, 0.7)"}
         linkLabel={(l: any) => l.label ? `label: ${l.label}` : ""}
         onNodeHover={(n: any) => setHover(n as GraphNode | null)}
         onNodeClick={(n: any) => {
+          setSelected(n as GraphNode);
           navigator.clipboard?.writeText(n.id).catch(() => {});
-          alert(
-            `${n.kind === "entity" ? "Entity" : "Chunk"}: ${n.id}\n\n` +
-            `Copied to clipboard.\n\nRun in Brain:\n` +
-            `brain_inspect(entity="${n.kind === "entity" ? n.name : n.id.slice(0, 12)}")`,
-          );
         }}
         cooldownTicks={0}
         warmupTicks={0}
@@ -247,9 +289,57 @@ export default function App() {
         showNavInfo={false}
       />
 
-      {/* hover footer */}
+      {/* bottom-right: hover or selected-node panel */}
       <div className="hud hud-br">
-        {hover ? (
+        {selected ? (
+          <>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <div className="hover-tier" style={{ color: selected.color }}>
+                {selected.kind === "entity"
+                  ? `🏷️ ${ENTITY_LABEL[(selected as EntityNode).entityKind] ?? "Entity"} · ${selected.name}`
+                  : `${TIER_LABEL[(selected as ChunkNode).tier] ?? (selected as ChunkNode).tier} · importance ${(selected as ChunkNode).importance.toFixed(2)}`}
+              </div>
+              <button
+                onClick={() => setSelected(null)}
+                style={{ background: "transparent", border: "none", color: "var(--text-dim)", cursor: "pointer", fontSize: "1rem", padding: 0 }}
+                title="close"
+              >×</button>
+            </div>
+            <div className="hover-id">{selected.id}</div>
+            <div className="hover-src">{selected.source || "—"}</div>
+            <div className="hover-preview">{selected.preview}</div>
+            <div className="hud-divider" />
+            <div className="hud-foot">
+              <b>{neighbors.length}</b> neighbor{neighbors.length === 1 ? "" : "s"}
+            </div>
+            {neighbors.map(({ node, edge, sim }) => (
+              <div
+                key={node.id}
+                onClick={() => setSelected(node)}
+                style={{
+                  borderLeft: `2px solid ${node.color}`,
+                  padding: "4px 8px",
+                  marginTop: 4,
+                  cursor: "pointer",
+                  background: "rgba(255,255,255,0.02)",
+                  borderRadius: 3,
+                  fontSize: "0.7rem",
+                  fontFamily: "var(--font-mono)",
+                  lineHeight: 1.4,
+                }}
+                title={node.preview}
+              >
+                <span style={{ color: node.color }}>
+                  {node.kind === "entity" ? "🏷️ " : ""}{node.name}
+                </span>
+                {" "}
+                <span style={{ opacity: 0.6 }}>
+                  {edge.label || edge.kind}
+                </span>
+              </div>
+            ))}
+          </>
+        ) : hover ? (
           <>
             <div className="hover-tier" style={{ color: hover.color }}>
               {hover.kind === "entity"
@@ -259,6 +349,9 @@ export default function App() {
             <div className="hover-id">{hover.id}</div>
             <div className="hover-src">{hover.source || "—"}</div>
             <div className="hover-preview">{hover.preview}</div>
+            <div className="hud-foot" style={{ marginTop: 8 }}>
+              <em>click to inspect neighbors</em>
+            </div>
           </>
         ) : (
           <div className="hover-empty">hover a node · click to recall</div>

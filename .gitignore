@@ -15,6 +15,10 @@ dist-ssr
 # Generated brain graph (regenerate via scripts/build-graph-json.py)
 public/brain-graph.json
 
+# Local secrets — never commit
+.env
+.env.local
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
