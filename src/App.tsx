@@ -191,7 +191,15 @@ export default function App() {
   const [hover, setHover] = useState<GraphNode | null>(null);
   const [search, setSearch] = useState("");
   const [viewMode, setViewMode] = useState<"all" | "connected" | "entities">("connected");
-  const [displayMode, setDisplayMode] = useState<"3d" | "kanban">("3d");
+  const [displayMode, setDisplayMode] = useState<"3d" | "kanban">(() => {
+    // Read ?display= on mount so ?display=kanban deep-links straight in
+    if (typeof window !== "undefined") {
+      const p = new URLSearchParams(window.location.search);
+      const d = p.get("display");
+      if (d === "kanban" || d === "3d") return d;
+    }
+    return "3d";
+  });
   const [selected, setSelected] = useState<GraphNode | null>(null);
   // Hide chunks that have no edges. Default ON because at 3,700+ chunks the
   // isolated ones pile into a dense sphere with no visible structure.
@@ -481,6 +489,18 @@ const toggleTier = (t: string) => {
           <b> {filtered.links.length.toLocaleString()}</b> edges
         </div>
       </div>
+
+      // Sync displayMode → URL hash so deep-links are shareable
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const url = new URL(window.location.href);
+    if (displayMode === "kanban") {
+      url.searchParams.set("display", "kanban");
+    } else {
+      url.searchParams.delete("display");
+    }
+    window.history.replaceState(null, "", url.toString());
+  }, [displayMode]);
 
       {/* Display: 3D graph OR Kanban view */}
       {displayMode === "3d" ? (
