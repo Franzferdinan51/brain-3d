@@ -1,3 +1,0 @@
-NOTE: this .sh must be COPIED to ~/Library/Application Support/brain-3d/scripts/
-      before launchd can run it (~/Desktop is blocked by launchd on modern macOS).
-      Use scripts/install-launchd-watcher.sh to install.
