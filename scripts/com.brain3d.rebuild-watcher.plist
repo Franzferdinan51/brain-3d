@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.brain3d.rebuild-watcher</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <!-- IMPORTANT: path MUST be under ~/Library/Application Support/, NOT ~/Desktop/.
+             launchd blocks executing shell scripts under ~/Desktop on modern macOS. -->
+        <string>/Users/duckets/Library/Application Support/brain-3d/scripts/rebuild-watcher.sh</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+    <key>StandardOutPath</key>
+    <string>/Users/duckets/Library/Application Support/brain-3d/logs/rebuild.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/duckets/Library/Application Support/brain-3d/logs/rebuild.err.log</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>HOME</key>
+        <string>/Users/duckets</string>
+        <key>PYTHONUNBUFFERED</key>
+        <string>1</string>
+    </dict>
+</dict>
+</plist>

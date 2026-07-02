@@ -69,6 +69,9 @@ export default function App() {
   const [hover, setHover] = useState<GraphNode | null>(null);
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState<GraphNode | null>(null);
+  // Hide chunks that have no edges. Default ON because at 3,700+ chunks the
+  // isolated ones pile into a dense sphere with no visible structure.
+  const [hideIsolated, setHideIsolated] = useState(true);
   const fgRef = useRef<any>(null);
 
   useEffect(() => {
@@ -123,7 +126,7 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, [selected]);
 
-  // Filter nodes by tier + entities + search
+  // Filter nodes by tier + entities + search + hide-isolated
   const filtered = useMemo(() => {
     if (!graph) return null;
     const q = search.trim().toLowerCase();
@@ -148,8 +151,26 @@ export default function App() {
       (l) => keepIds.has(typeof l.source === "string" ? l.source : (l.source as any).id)
         && keepIds.has(typeof l.target === "string" ? l.target : (l.target as any).id),
     );
-    return { nodes, links };
-  }, [graph, activeTiers, showEntities, search]);
+    // Hide-isolated: drop chunk nodes that have no edges (entity nodes always kept)
+    let connectedIds = keepIds;
+    if (hideIsolated) {
+      connectedIds = new Set<string>();
+      for (const l of links) {
+        const sid = typeof l.source === "string" ? l.source : (l.source as any).id;
+        const tid = typeof l.target === "string" ? l.target : (l.target as any).id;
+        connectedIds.add(sid);
+        connectedIds.add(tid);
+      }
+      // always keep entity nodes
+      for (const n of nodes) if (n.kind === "entity") connectedIds.add(n.id);
+    }
+    const finalNodes = nodes.filter((n) => connectedIds.has(n.id));
+    const finalLinks = links.filter(
+      (l) => connectedIds.has(typeof l.source === "string" ? l.source : (l.source as any).id)
+        && connectedIds.has(typeof l.target === "string" ? l.target : (l.target as any).id),
+    );
+    return { nodes: finalNodes, links: finalLinks };
+  }, [graph, activeTiers, showEntities, search, hideIsolated]);
 
   const stats = useMemo(() => {
     if (!graph) return null;
@@ -212,8 +233,10 @@ const toggleTier = (t: string) => {
     const ents   = filtered?.nodes.filter((n) => n.kind === "entity") ?? [];
     const N = chunks.length;
     const phi = Math.PI * (3 - Math.sqrt(5)); // golden angle
+    // Adaptive radius: smaller when fewer chunks (so the graph stays compact on
+    // its own), larger when many (still spread enough to read).
+    const r = N < 200 ? 80 : N < 1000 ? 110 : 130;
     chunks.forEach((c, i) => {
-      const r = 120 + (i / Math.max(N, 1)) * 30;        // shell radius by rank
       const y = 1 - (i / Math.max(N - 1, 1)) * 2;       // -1..1
       const rad = Math.sqrt(1 - y * y);
       const theta = phi * i;
@@ -223,9 +246,9 @@ const toggleTier = (t: string) => {
     });
     ents.forEach((e, i) => {
       const ang = (i / Math.max(ents.length, 1)) * Math.PI * 2;
-      (e as any).fx = Math.cos(ang) * 25;
+      (e as any).fx = Math.cos(ang) * 20;
       (e as any).fy = 0;
-      (e as any).fz = Math.sin(ang) * 25;
+      (e as any).fz = Math.sin(ang) * 20;
     });
     if (fgRef.current) {
       (fgRef.current as any).d3ReheatSimulation?.();
@@ -274,6 +297,15 @@ const toggleTier = (t: string) => {
         >
           <span className="tier-dot" style={{ background: "#fb7185" }} />
           Entities <span className="tier-count">{stats.entities.toLocaleString()}</span>
+        </button>
+        <button
+          className={`tier-chip ${hideIsolated ? "on" : "off"}`}
+          style={{ borderColor: "#a78bfa" }}
+          onClick={() => setHideIsolated((v) => !v)}
+          title="Hide chunk nodes that have NO edges (clearer viz)"
+        >
+          <span className="tier-dot" style={{ background: "#a78bfa" }} />
+          Connected only
         </button>
         <div className="hud-divider" />
         <input
