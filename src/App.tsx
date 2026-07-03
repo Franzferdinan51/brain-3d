@@ -408,19 +408,28 @@ const toggleTier = (t: string) => {
         (e as any).fz = Math.sin(ang) * 20;
       });
     } else {
-      // Spread mode: clear fx/fy/fz so force-graph physics takes over.
-      [...chunks, ...ents].forEach((n, idx) => {
-        // Re-seed position to a small sphere so physics has a starting point
-        if ((n as any).x === undefined) {
-          const phi = Math.PI * (3 - Math.sqrt(5));
-          const total = chunks.length + ents.length;
-          const y = 1 - (idx / Math.max(total - 1, 1)) * 2;
-          const rad = Math.sqrt(1 - y * y);
-          const theta = phi * idx;
-          (n as any).x = Math.cos(theta) * rad * 80;
-          (n as any).y = y * 80;
-          (n as any).z = Math.sin(theta) * rad * 80;
+      // Spread mode: reset EVERY node's position to a chaotic scatter so the
+      // force-graph has room to find equilibrium with edges. Without this,
+      // nodes inherit spiral-layout positions (radius 80-130 sphere) and the
+      // physics collapses everything back to a ball because the spiral is
+      // already at the equilibrium distance for 8,850 edges.
+      // Random scatter in a box of side ~400 units gives plenty of room for
+      // clusters to form via short link distance (35) and weak charge (-25).
+      [...chunks, ...ents].forEach((n) => {
+        // Deterministic but well-spread: hash the node id to 3 0..1 numbers
+        // so React strict-mode re-runs produce the same scatter (no flicker).
+        const idStr = String((n as any).id || "");
+        let h = 2166136261;
+        for (let i = 0; i < idStr.length; i++) {
+          h ^= idStr.charCodeAt(i);
+          h = Math.imul(h, 16777619);
         }
+        const a = ((h >>> 0) % 100000) / 100000;                 // 0..1
+        const b = (((h * 2654435761) >>> 0) % 100000) / 100000;  // 0..1
+        const c = (((h * 40503)     >>> 0) % 100000) / 100000;  // 0..1
+        (n as any).x = (a - 0.5) * 400; // -200..200
+        (n as any).y = (b - 0.5) * 400;
+        (n as any).z = (c - 0.5) * 400;
         delete (n as any).fx;
         delete (n as any).fy;
         delete (n as any).fz;
