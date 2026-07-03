@@ -458,10 +458,14 @@ const toggleTier = (t: string) => {
 
   return (
     <div className="app">
-      {/* HUD top-left */}
+      {/* HUD top-left: full in 3D mode, minimal (just title + Display toggle) in Kanban mode.
+          The full stats/View/Layout panels are 3D-only because they don't apply to kanban.
+          The Display toggle stays visible in both so user can switch back to 3D. */}
       <div className="hud hud-tl">
         <div className="hud-title">🧠 Brain 3D</div>
         <div className="hud-sub">read-only visualizer for duckbot-rag-memory</div>
+        {displayMode === "3d" && (
+          <>
         <div className="hud-divider" />
         <div className="hud-stat">{stats.total.toLocaleString()} nodes</div>
         {Object.entries(stats.byTier).map(([t, n]) => (
@@ -563,6 +567,8 @@ const toggleTier = (t: string) => {
           showing <b>{filtered.nodes.length.toLocaleString()}</b> / {stats.total.toLocaleString()} nodes ·
           <b> {filtered.links.length.toLocaleString()}</b> edges
         </div>
+          </>
+        )}
       </div>
 
       {/* Display: 3D graph OR Kanban view */}
@@ -630,7 +636,8 @@ const toggleTier = (t: string) => {
         <KanbanBoard />
       )}
 
-      {/* bottom-right: hover info */}
+      {/* bottom-right: hover info — only relevant in 3D mode */}
+      {displayMode === "3d" && (
       <div className="hud hud-br">
         {hover ? (
           <>
@@ -650,6 +657,7 @@ const toggleTier = (t: string) => {
           <div className="hover-empty">hover a node · click to inspect</div>
         )}
       </div>
+      )}
 
       {/* Click-to-inspect modal: opens when a node is clicked.
           Shows full chunk text + clickable neighbors list. */}
