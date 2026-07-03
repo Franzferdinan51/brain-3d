@@ -72,7 +72,11 @@ type KanbanTask = {
   created: string;
   updated: string;
   note?: string;
+  assignee?: string;
+  raw_status?: string;
 };
+
+type KanbanSource = { id: string; label: string; available: boolean; alwaysOn: boolean };
 
 function formatAgo(iso: string): string {
   if (!iso) return "";
@@ -90,26 +94,68 @@ function KanbanBoard() {
   const [updated, setUpdated] = useState<string>("");
   const [polling, setPolling] = useState<boolean>(true);
   const [err, setErr] = useState<string | null>(null);
+  const [activeSource, setActiveSource] = useState<string>("");
+  const [availableSources, setAvailableSources] = useState<KanbanSource[]>([]);
+  const [activeAgent, setActiveAgent] = useState<string | null>(null);
+  const [sourceOverride, setSourceOverride] = useState<string | null>(
+    // Read ?source= from URL on mount so manual overrides deep-link
+    (() => {
+      try {
+        const url = new URL(window.location.href);
+        return url.searchParams.get("source") || null;
+      } catch { return null; }
+    })()
+  );
 
   const fetch_ = async () => {
     try {
-      const r = await fetch("/api/kanban", { cache: "no-store" });
+      const url = sourceOverride ? `/api/kanban?source=${encodeURIComponent(sourceOverride)}` : "/api/kanban";
+      const r = await fetch(url, { cache: "no-store" });
       if (!r.ok) throw new Error(`status ${r.status}`);
       const data = await r.json();
       setTasks(data.tasks || []);
       setUpdated(data.updated || "");
-      setErr(null);
+      setActiveSource(data.source || "");
+      setActiveAgent(data.active_agent || null);
+      if (data.error) setErr(String(data.error));
+      else setErr(null);
     } catch (e: any) {
       setErr(String(e?.message || e));
     }
   };
 
+  const fetchSources = async () => {
+    try {
+      const r = await fetch("/api/kanban/sources", { cache: "no-store" });
+      if (!r.ok) return;
+      const data = await r.json();
+      setAvailableSources(data.sources || []);
+    } catch {/* ignore */}
+  };
+
   useEffect(() => {
+    fetchSources();
     fetch_();
     if (!polling) return;
-    const id = setInterval(fetch_, 2000);
+    const id = setInterval(() => { fetchSources(); fetch_(); }, 2000);
     return () => clearInterval(id);
-  }, [polling]);
+  }, [polling, sourceOverride]);
+
+  // Keep URL ?source= in sync with the dropdown so it can be deep-linked
+  useEffect(() => {
+    try {
+      const url = new URL(window.location.href);
+      if (sourceOverride) {
+        url.searchParams.set("source", sourceOverride);
+      } else {
+        url.searchParams.delete("source");
+      }
+      const newUrl = url.pathname + (url.search ? url.search : "") + url.hash;
+      if (newUrl !== window.location.pathname + window.location.search + window.location.hash) {
+        window.history.replaceState(null, "", newUrl);
+      }
+    } catch {/* ignore */}
+  }, [sourceOverride]);
 
   const cols: { status: KanbanTask["status"]; icon: string; label: string }[] = [
     { status: "todo",   icon: "📌", label: "Todo"   },
@@ -132,9 +178,29 @@ function KanbanBoard() {
         <span className="kanban-toolbar-info">
           {tasks.length} task{tasks.length === 1 ? "" : "s"}
           {updated ? ` · updated ${formatAgo(updated)}` : ""}
+          {activeSource ? ` · source: ${activeSource}` : ""}
+          {activeAgent && activeAgent !== activeSource ? ` · agent: ${activeAgent}` : ""}
           {err ? <span style={{ color: "#fca5a5" }}> · error: {err}</span> : null}
         </span>
         <span className="kanban-spacer" />
+        {availableSources.length > 0 ? (
+          <select
+            className="kanban-btn"
+            value={sourceOverride || activeSource || ""}
+            onChange={(e) => setSourceOverride(e.target.value || null)}
+            title="Switch task source (Hermes/DuckBot-JSON/etc.)"
+            style={{ background: "#0c1322", color: "#e2e8f0", border: "1px solid #1e293b", borderRadius: "4px", padding: "4px 8px" }}
+          >
+            {sourceOverride ? (
+              <option value="">auto ({activeSource || "?"})</option>
+            ) : null}
+            {availableSources.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.label} {s.alwaysOn ? "· canonical" : ""}
+              </option>
+            ))}
+          </select>
+        ) : null}
         <button
           className="kanban-btn"
           onClick={() => setPolling((p) => !p)}
@@ -177,6 +243,9 @@ function KanbanBoard() {
       </div>
       <div className="kanban-foot">
         POST a card: <code>curl -X POST http://127.0.0.1:5173/api/kanban/append -H 'Content-Type: application/json' -d '{`{"task":{"title":"…","status":"doing"}}`}'</code>
+        {" · "}
+        Sources: <code>/api/kanban/sources</code> (registry) · <code>/api/kanban?source=&lt;id&gt;</code> (override)
+        {sourceOverride ? <span style={{ color: "#fbbf24" }}> · manual source: <code>{sourceOverride}</code></span> : <span style={{ opacity: 0.5 }}> · reading active agent: <code>{activeSource || "?"}</code></span>}
       </div>
     </div>
   );
