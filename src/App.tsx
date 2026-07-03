@@ -355,6 +355,18 @@ const toggleTier = (t: string) => {
     });
   };
 
+  // Sync displayMode → URL hash so deep-links are shareable
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const url = new URL(window.location.href);
+    if (displayMode === "kanban") {
+      url.searchParams.set("display", "kanban");
+    } else {
+      url.searchParams.delete("display");
+    }
+    window.history.replaceState(null, "", url.toString());
+  }, [displayMode]);
+
   // Deterministic spiral layout for chunks (no force needed); force-layout for entities
   useEffect(() => {
     if (!graph) return;
@@ -489,18 +501,6 @@ const toggleTier = (t: string) => {
           <b> {filtered.links.length.toLocaleString()}</b> edges
         </div>
       </div>
-
-      // Sync displayMode → URL hash so deep-links are shareable
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const url = new URL(window.location.href);
-    if (displayMode === "kanban") {
-      url.searchParams.set("display", "kanban");
-    } else {
-      url.searchParams.delete("display");
-    }
-    window.history.replaceState(null, "", url.toString());
-  }, [displayMode]);
 
       {/* Display: 3D graph OR Kanban view */}
       {displayMode === "3d" ? (
