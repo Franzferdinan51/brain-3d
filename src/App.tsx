@@ -408,15 +408,17 @@ const toggleTier = (t: string) => {
         (e as any).fz = Math.sin(ang) * 20;
       });
     } else {
-      // Spread mode: reset EVERY node's position to a chaotic scatter so the
+      // Spread mode: reset EVERY node's position to a chaotic scatter inside
+      // a SPHERE so the resulting shape is round (not a sharp cube) and the
       // force-graph has room to find equilibrium with edges. Without this,
       // nodes inherit spiral-layout positions (radius 80-130 sphere) and the
       // physics collapses everything back to a ball because the spiral is
       // already at the equilibrium distance for 8,850 edges.
-      // Random scatter in a box of side ~400 units gives plenty of room for
-      // clusters to form via short link distance (35) and weak charge (-25).
+      // Method: pick a random direction on the unit sphere (Marsaglia 1972
+      // uses 2 uniforms → 1 unit vector), then pick a radius cubed so the
+      // density is uniform inside the ball from center to surface.
       [...chunks, ...ents].forEach((n) => {
-        // Deterministic but well-spread: hash the node id to 3 0..1 numbers
+        // Deterministic but well-spread: hash the node id to 4 0..1 numbers
         // so React strict-mode re-runs produce the same scatter (no flicker).
         const idStr = String((n as any).id || "");
         let h = 2166136261;
@@ -424,12 +426,37 @@ const toggleTier = (t: string) => {
           h ^= idStr.charCodeAt(i);
           h = Math.imul(h, 16777619);
         }
-        const a = ((h >>> 0) % 100000) / 100000;                 // 0..1
-        const b = (((h * 2654435761) >>> 0) % 100000) / 100000;  // 0..1
-        const c = (((h * 40503)     >>> 0) % 100000) / 100000;  // 0..1
-        (n as any).x = (a - 0.5) * 400; // -200..200
-        (n as any).y = (b - 0.5) * 400;
-        (n as any).z = (c - 0.5) * 400;
+        // Four pseudo-uniforms in [0,1)
+        const u1 = ((h >>> 0)             % 100000) / 100000;
+        const u2 = (((h * 2654435761) >>> 0) % 100000) / 100000;
+        const u3 = (((h * 40503)     >>> 0) % 100000) / 100000;
+        const u4 = (((h * 31415927)  >>> 0) % 100000) / 100000;
+        // Marsaglia (1972) uniform point on unit sphere: pick (x1,x2) in
+        // the unit disk, then z = 1 - 2*s, t = 2*sqrt(1-s). We do this
+        // via rejection from two uniforms.
+        const a = u1 * 2 - 1; // -1..1
+        const b = u2 * 2 - 1; // -1..1
+        const s2 = a * a + b * b;
+        if (s2 < 1) {
+          const factor = 2 * Math.sqrt(1 - s2);
+          (n as any).x = a * factor;
+          (n as any).y = b * factor;
+          (n as any).z = 1 - 2 * s2;
+        } else {
+          // Fallback for rejection: pick any unit vector
+          (n as any).x = a;
+          (n as any).y = b;
+          (n as any).z = 0.5;
+          const len = Math.hypot((n as any).x, (n as any).y, (n as any).z) || 1;
+          (n as any).x /= len; (n as any).y /= len; (n as any).z /= len;
+        }
+        // Uniform radius: r = R * u4^(1/3). Gives even density from center
+        // to surface of the ball.
+        const R = 220;
+        const r = R * Math.cbrt(u3);
+        (n as any).x = (n as any).x * r;
+        (n as any).y = (n as any).y * r;
+        (n as any).z = (n as any).z * r;
         delete (n as any).fx;
         delete (n as any).fy;
         delete (n as any).fz;
