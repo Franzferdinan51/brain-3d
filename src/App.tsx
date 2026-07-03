@@ -202,6 +202,10 @@ export default function App() {
     return "3d";
   });
   const [selected, setSelected] = useState<GraphNode | null>(null);
+  // Edge inspector state. A "link" here is a plain Link object with resolved
+  // source/target id strings (react-force-graph mutates them to node refs after
+  // force simulation, so we capture the original ids at click time).
+  const [selectedLink, setSelectedLink] = useState<(Link & { _srcId: string; _tgtId: string }) | null>(null);
   const [useSpread, setUseSpread] = useState<boolean>(() => {
     if (typeof window !== "undefined") {
       const p = new URLSearchParams(window.location.search);
@@ -230,6 +234,30 @@ export default function App() {
       const id = decodeURIComponent(window.location.hash.replace(/^#/, ""));
       if (!id) return;
       if (!graph) return false;
+      // Edge hash format: link:<srcId>><label>|<tgtId>  (label may be empty)
+      if (id.startsWith("link:")) {
+        const payload = id.slice("link:".length);
+        const [srcPart, tgtPart] = payload.split(">>");
+        if (srcPart && tgtPart) {
+          const [srcId, ...labelParts] = srcPart.split("|");
+          const tgtId = tgtPart.split("|")[0];
+          const label = labelParts.join("|");
+          const link = graph.links.find(
+            (l) => {
+              const s = typeof l.source === "string" ? l.source : (l.source as any)?.id;
+              const t = typeof l.target === "string" ? l.target : (l.target as any)?.id;
+              return s === srcId && t === tgtId && (l.label || "") === label;
+            }
+          );
+          if (link) {
+            const sId = typeof link.source === "string" ? link.source : (link.source as any).id;
+            const tId = typeof link.target === "string" ? link.target : (link.target as any).id;
+            setSelectedLink({ ...link, _srcId: sId, _tgtId: tId });
+            return true;
+          }
+        }
+        return false;
+      }
       const node = graph.nodes.find((n) => n.id === id || n.id.endsWith(id));
       if (node) {
         setSelected(node);
@@ -253,18 +281,19 @@ export default function App() {
     if (node) setSelected(node);
   }, [graph]);
 
-  // Esc to close the inspector
+  // Esc to close the inspector (works for both node and edge modals)
   useEffect(() => {
-    if (!selected) return;
+    if (!selected && !selectedLink) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         setSelected(null);
+        setSelectedLink(null);
         window.history.replaceState(null, "", window.location.pathname);
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [selected]);
+  }, [selected, selectedLink]);
 
   // Filter nodes by tier + entities + search + viewMode
   const filtered = useMemo(() => {
@@ -657,22 +686,30 @@ const toggleTier = (t: string) => {
         nodeOpacity={0.9}
         linkColor={(l: any) => l.color || "rgba(148,163,184,0.25)"}
         linkWidth={(l: any) => {
-          // Similarity edges thicker for stronger relationships; entity edges fixed
+          // Similarity edges thicker for stronger relationships; entity edges fixed.
+          // Widths boosted 4-5x from original so they're actually clickable.
           if (l.kind === "similarity-edge") {
             const sim = parseFloat((l.label || "").replace(/[^\d.]/g, "")) || 0.5;
-            return 0.3 + (sim - 0.5) * 1.5;
+            return 1.5 + (sim - 0.5) * 6;  // 1.5-4.5px (was 0.3-1.3)
           }
-          return 0.8;  // entity edges a bit thicker
+          return 3.5;  // entity edges thick enough to click (was 0.8)
         }}
         linkDirectionalParticles={(l: any) =>
           l.kind === "similarity-edge" ? 1 : 0
         }
         linkDirectionalParticleWidth={1.5}
         linkDirectionalParticleColor={() => "rgba(34, 211, 238, 0.7)"}
-        linkLabel={(l: any) => l.label ? `label: ${l.label}` : ""}
+        linkLabel={(l: any) => {
+          // Resolve source/target id from either string or node ref
+          const s = typeof l.source === "string" ? l.source : l.source?.id;
+          const t = typeof l.target === "string" ? l.target : l.target?.id;
+          const lbl = l.label || l.kind || "edge";
+          return `click to inspect<br/><span style="opacity:0.6">${s} → ${t}</span><br/><b>${lbl}</b>`;
+        }}
         onNodeHover={(n: any) => setHover(n as GraphNode | null)}
         onNodeClick={(n: any) => {
           setSelected(n as GraphNode);
+          setSelectedLink(null);  // close edge modal if open
           navigator.clipboard?.writeText(n.id).catch(() => {});
           // Update URL hash so the selection is shareable / bookmarkable
           window.history.replaceState(null, "", `#${n.id}`);
@@ -689,6 +726,20 @@ const toggleTier = (t: string) => {
             );
           }
         }}
+        onLinkClick={(l: any) => {
+          // Capture source/target as id strings (force-graph may have mutated
+          // them to node refs by the time this fires).
+          const sId = typeof l.source === "string" ? l.source : l.source?.id;
+          const tId = typeof l.target === "string" ? l.target : l.target?.id;
+          if (!sId || !tId) return;
+          setSelectedLink({ ...l, _srcId: sId, _tgtId: tId });
+          setSelected(null);  // close node modal if open
+          // Shareable hash: link:<srcId>|<label>>><tgtId>
+          const lbl = l.label || "";
+          const hash = `link:${sId}|${lbl}>>${tId}`;
+          window.history.replaceState(null, "", `#${hash}`);
+          navigator.clipboard?.writeText(hash).catch(() => {});
+        }}
         cooldownTicks={0}
         warmupTicks={0}
         d3AlphaMin={0}
@@ -697,6 +748,7 @@ const toggleTier = (t: string) => {
         showNavInfo={false}
         onBackgroundClick={() => {
           setSelected(null);
+          setSelectedLink(null);
           window.history.replaceState(null, "", window.location.pathname);
         }}
       />
@@ -815,6 +867,139 @@ const toggleTier = (t: string) => {
 
             <div className="inspector-foot">
               press <kbd>esc</kbd> to close · click neighbor to drill in
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Edge inspector: opens when a link is clicked.
+          Shows src, tgt, label, kind, similarity (if any), and lets you
+          drill into either endpoint. */}
+      {selectedLink && (
+        <div
+          className="inspector-backdrop"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setSelectedLink(null);
+          }}
+        >
+          <div className="inspector">
+            <div className="inspector-head">
+              <div className="hover-tier" style={{ color: selectedLink.color || "#94a3b8", fontSize: "1rem" }}>
+                🔗 {selectedLink.label || selectedLink.kind || "edge"}
+              </div>
+              <button
+                className="inspector-close"
+                onClick={() => {
+                  setSelectedLink(null);
+                  window.history.replaceState(null, "", window.location.pathname);
+                }}
+                title="close (esc)"
+              >×</button>
+            </div>
+
+            <div className="inspector-meta">
+              <div><b>kind:</b> <code>{selectedLink.kind || "edge"}</code></div>
+              {selectedLink.label && (
+                <div><b>label:</b> <code>{selectedLink.label}</code></div>
+              )}
+              <div><b>weight:</b> {
+                selectedLink.kind === "similarity-edge" && selectedLink.label
+                  ? (() => {
+                      const m = selectedLink.label.match(/[\d.]+/);
+                      return m ? <><code>{m[0]}</code> (similarity)</> : <code>—</code>;
+                    })()
+                  : <code>—</code>
+              }</div>
+            </div>
+
+            <div className="hud-divider" />
+
+            {/* Endpoints: drill into either side of the edge */}
+            <div className="inspector-neighbors">
+              <div className="inspector-section-label">ENDPOINTS</div>
+              {(() => {
+                if (!graph) return null;
+                const endpoints = [selectedLink._srcId, selectedLink._tgtId]
+                  .map((id) => graph.nodes.find((n) => n.id === id))
+                  .filter((n): n is GraphNode => !!n);
+                if (endpoints.length === 0) {
+                  return <div className="inspector-empty">no endpoint nodes in current graph</div>;
+                }
+                return endpoints.map((node) => (
+                  <div
+                    key={node.id}
+                    className="inspector-neighbor-row"
+                    onClick={() => {
+                      setSelectedLink(null);
+                      setSelected(node);
+                      window.history.replaceState(null, "", `#${node.id}`);
+                    }}
+                    title={node.preview}
+                  >
+                    <span className="inspector-neighbor-dot" style={{ background: node.color }} />
+                    <span style={{ color: node.color, flex: 1 }}>
+                      {node.kind === "entity" ? "🏷️ " : ""}{node.name}
+                    </span>
+                    <span className="inspector-neighbor-edge">
+                      {node.kind === "entity"
+                        ? `🏷️ ${ENTITY_LABEL[(node as EntityNode).entityKind] ?? "Entity"}`
+                        : TIER_LABEL[(node as ChunkNode).tier] ?? (node as ChunkNode).tier}
+                    </span>
+                  </div>
+                ));
+              })()}
+            </div>
+
+            <div className="hud-divider" />
+
+            {/* Other edges sharing one of these endpoints — "neighbors of edge" */}
+            <div className="inspector-neighbors">
+              <div className="inspector-section-label">NEIGHBORING EDGES</div>
+              {(() => {
+                if (!graph) return null;
+                const sId = selectedLink._srcId;
+                const tId = selectedLink._tgtId;
+                const related = graph.links.filter((l) => {
+                  const l_s = typeof l.source === "string" ? l.source : (l.source as any)?.id;
+                  const l_t = typeof l.target === "string" ? l.target : (l.target as any)?.id;
+                  // edges that touch src OR tgt (but aren't this edge itself)
+                  const touches = l_s === sId || l_t === sId || l_s === tId || l_t === tId;
+                  const isThis = l_s === sId && l_t === tId && (l.label || "") === (selectedLink.label || "");
+                  return touches && !isThis;
+                }).slice(0, 8);
+                if (related.length === 0) {
+                  return <div className="inspector-empty">no other edges touch these endpoints</div>;
+                }
+                return related.map((l, i) => {
+                  const l_s = typeof l.source === "string" ? l.source : (l.source as any)?.id;
+                  const l_t = typeof l.target === "string" ? l.target : (l.target as any)?.id;
+                  return (
+                    <div
+                      key={i}
+                      className="inspector-neighbor-row"
+                      onClick={() => {
+                        const lbl = l.label || "";
+                        const hash = `link:${l_s}|${lbl}>>${l_t}`;
+                        const synthLink = { ...l, _srcId: l_s, _tgtId: l_t };
+                        setSelectedLink(synthLink);
+                        window.history.replaceState(null, "", `#${hash}`);
+                      }}
+                    >
+                      <span className="inspector-neighbor-dot" style={{ background: l.color || "#94a3b8" }} />
+                      <span style={{ flex: 1, fontSize: "0.85em", opacity: 0.85 }}>
+                        {l_s.split(":")[0]} → {l_t.split(":")[0]}
+                      </span>
+                      <span className="inspector-neighbor-edge">
+                        {l.label || l.kind || "edge"}
+                      </span>
+                    </div>
+                  );
+                });
+              })()}
+            </div>
+
+            <div className="inspector-foot">
+              press <kbd>esc</kbd> to close · click endpoint to drill in · click edge to swap
             </div>
           </div>
         </div>
