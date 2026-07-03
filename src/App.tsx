@@ -214,7 +214,7 @@ export default function App() {
   const fgRef = useRef<any>(null);
 
   useEffect(() => {
-    fetch("/brain-graph.json")
+    fetch(`/brain-graph.json?v=${Date.now()}`)
       .then((r) => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         return r.json();
@@ -428,7 +428,16 @@ const toggleTier = (t: string) => {
     }
 
     if (fgRef.current) {
-      (fgRef.current as any).d3ReheatSimulation?.();
+      if (useSpread) {
+        // Tune forces for cluster formation:
+        //   - weaker charge (less repulsion → chunks can come together)
+        //   - shorter link distance (edges pull strong, not just suggest)
+        //   - alpha reheat (start at full energy, let it find equilibrium)
+        const fg: any = fgRef.current;
+        fg.d3Force?.("charge")?.strength(-25);     // default ~ -30
+        fg.d3Force?.("link")?.distance(35);         // default ~ 30
+        fg.d3ReheatSimulation?.();
+      }
       setTimeout(() => fgRef.current?.zoomToFit(600, 120), 600);
     }
   }, [filtered, useSpread]);

@@ -165,6 +165,12 @@ def loop_watch(interval_sec: int) -> int:
     backoff = 0
     while True:
         try:
+            # Skip if a manual rebuild is in progress (marker file exists)
+            rebuild_marker = DEFAULT_OUT.parent / (DEFAULT_OUT.name + ".rebuilding")
+            if rebuild_marker.exists():
+                log_handle.write(f"[{_now_ms()}] manual rebuild in progress (marker exists), skipping this pass\n")
+                time.sleep(interval_sec)
+                continue
             prev = _load_state()
             if needs_rebuild(DEFAULT_EXPORT, DEFAULT_GRAPH, DEFAULT_CHROMA, prev):
                 log_handle.write(f"[{_now_ms()}] stale detected, rebuilding…\n")
