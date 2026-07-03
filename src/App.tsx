@@ -201,6 +201,13 @@ export default function App() {
     return "3d";
   });
   const [selected, setSelected] = useState<GraphNode | null>(null);
+  const [useSpread, setUseSpread] = useState<boolean>(() => {
+    if (typeof window !== "undefined") {
+      const p = new URLSearchParams(window.location.search);
+      return p.get("spread") === "1";
+    }
+    return false;
+  });
   // Hide chunks that have no edges. Default ON because at 3,700+ chunks the
   // isolated ones pile into a dense sphere with no visible structure.
   
@@ -355,7 +362,7 @@ const toggleTier = (t: string) => {
     });
   };
 
-  // Sync displayMode → URL hash so deep-links are shareable
+  // Sync displayMode + spread → URL searchParams so deep-links are shareable
   useEffect(() => {
     if (typeof window === "undefined") return;
     const url = new URL(window.location.href);
@@ -364,40 +371,67 @@ const toggleTier = (t: string) => {
     } else {
       url.searchParams.delete("display");
     }
+    if (useSpread) {
+      url.searchParams.set("spread", "1");
+    } else {
+      url.searchParams.delete("spread");
+    }
     window.history.replaceState(null, "", url.toString());
-  }, [displayMode]);
+  }, [displayMode, useSpread]);
 
   // Deterministic spiral layout for chunks (no force needed); force-layout for entities
   useEffect(() => {
     if (!graph) return;
-    // Assign positions: chunks on a Fibonacci-spiral sphere shell;
-    // entities clustered at the center with small jitter.
     const chunks = filtered?.nodes.filter((n) => n.kind !== "entity") ?? [];
     const ents   = filtered?.nodes.filter((n) => n.kind === "entity") ?? [];
-    const N = chunks.length;
-    const phi = Math.PI * (3 - Math.sqrt(5)); // golden angle
-    // Adaptive radius: smaller when fewer chunks (so the graph stays compact on
-    // its own), larger when many (still spread enough to read).
-    const r = N < 200 ? 80 : N < 1000 ? 110 : 130;
-    chunks.forEach((c, i) => {
-      const y = 1 - (i / Math.max(N - 1, 1)) * 2;       // -1..1
-      const rad = Math.sqrt(1 - y * y);
-      const theta = phi * i;
-      (c as any).fx = Math.cos(theta) * rad * r;
-      (c as any).fy = y * r;
-      (c as any).fz = Math.sin(theta) * rad * r;
-    });
-    ents.forEach((e, i) => {
-      const ang = (i / Math.max(ents.length, 1)) * Math.PI * 2;
-      (e as any).fx = Math.cos(ang) * 20;
-      (e as any).fy = 0;
-      (e as any).fz = Math.sin(ang) * 20;
-    });
+
+    if (!useSpread) {
+      // Spiral layout: chunks on a Fibonacci-spiral sphere shell;
+      // entities clustered at the center with small jitter.
+      const N = chunks.length;
+      const phi = Math.PI * (3 - Math.sqrt(5)); // golden angle
+      // Adaptive radius: smaller when fewer chunks (so the graph stays compact on
+      // its own), larger when many (still spread enough to read).
+      const r = N < 200 ? 80 : N < 1000 ? 110 : 130;
+      chunks.forEach((c, i) => {
+        const y = 1 - (i / Math.max(N - 1, 1)) * 2;       // -1..1
+        const rad = Math.sqrt(1 - y * y);
+        const theta = phi * i;
+        (c as any).fx = Math.cos(theta) * rad * r;
+        (c as any).fy = y * r;
+        (c as any).fz = Math.sin(theta) * rad * r;
+      });
+      ents.forEach((e, i) => {
+        const ang = (i / Math.max(ents.length, 1)) * Math.PI * 2;
+        (e as any).fx = Math.cos(ang) * 20;
+        (e as any).fy = 0;
+        (e as any).fz = Math.sin(ang) * 20;
+      });
+    } else {
+      // Spread mode: clear fx/fy/fz so force-graph physics takes over.
+      [...chunks, ...ents].forEach((n, idx) => {
+        // Re-seed position to a small sphere so physics has a starting point
+        if ((n as any).x === undefined) {
+          const phi = Math.PI * (3 - Math.sqrt(5));
+          const total = chunks.length + ents.length;
+          const y = 1 - (idx / Math.max(total - 1, 1)) * 2;
+          const rad = Math.sqrt(1 - y * y);
+          const theta = phi * idx;
+          (n as any).x = Math.cos(theta) * rad * 80;
+          (n as any).y = y * 80;
+          (n as any).z = Math.sin(theta) * rad * 80;
+        }
+        delete (n as any).fx;
+        delete (n as any).fy;
+        delete (n as any).fz;
+      });
+    }
+
     if (fgRef.current) {
       (fgRef.current as any).d3ReheatSimulation?.();
       setTimeout(() => fgRef.current?.zoomToFit(600, 120), 600);
     }
-  }, [filtered]);
+  }, [filtered, useSpread]);
 
   if (err) {
     return (
@@ -485,6 +519,26 @@ const toggleTier = (t: string) => {
               title="23-entity knowledge graph only"
             >
               Graph
+            </button>
+          </div>
+        </div>
+        <div className="hud-divider" />
+        <div className="view-mode-row">
+          <span className="view-mode-label">Layout</span>
+          <div className="segmented">
+            <button
+              className={`seg ${!useSpread ? "on" : ""}`}
+              onClick={() => setUseSpread(false)}
+              title="Pinned to Fibonacci sphere (deterministic, fast)"
+            >
+              Sphere
+            </button>
+            <button
+              className={`seg ${useSpread ? "on" : ""}`}
+              onClick={() => setUseSpread(true)}
+              title="Force-directed: connected chunks cluster, isolated ones pushed apart (slower, organic)"
+            >
+              Spread
             </button>
           </div>
         </div>
