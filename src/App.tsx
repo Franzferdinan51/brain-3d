@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import ForceGraph3D from "react-force-graph-3d";
+import * as THREE from "three";
 import "./App.css";
 
 // Shape matches what build-graph-json.py emits
@@ -614,7 +615,38 @@ const toggleTier = (t: string) => {
         graphData={filtered}
         backgroundColor="#050810"
         nodeColor={(n: any) => n.color}
-        nodeVal={(n: any) => n.val}
+        nodeVal={(n: any) => {
+          // Boost non-episodic node sizes so they protrude through the
+          // episodic sphere. Episodic unchanged (already dominates visually).
+          const base = (n.val || 1) * 4;
+          if (n.kind === "entity") return base * 1.4;
+          if (n.tier === "working") return base * 1.2;
+          if (n.tier === "procedural") return base * 1.1;
+          if (n.tier === "semantic") return base * 1.0;
+          return n.val || 1;
+        }}
+        nodeThreeObject={(n: any) => {
+          // For non-episodic chunk nodes, render in front of the episodic
+          // sphere with depthTest=false. This guarantees clicks on
+          // working/procedural/semantic nodes register even when an
+          // episodic chunk is physically in front of them.
+          const tier = n.tier;
+          if (n.kind !== "chunk" || !tier || tier === "episodic") {
+            return undefined;  // use default sphere rendering
+          }
+          const radius = Math.cbrt(((n.val || 1) * 4) * 0.5);  // mirror default sphere size
+          const geo = new THREE.SphereGeometry(radius, 12, 12);
+          const mat = new THREE.MeshLambertMaterial({
+            color: n.color,
+            transparent: true,
+            opacity: 0.95,
+            depthTest: false,
+            depthWrite: false,
+          });
+          const mesh = new THREE.Mesh(geo, mat);
+          mesh.renderOrder = 999;
+          return mesh;
+        }}
         nodeLabel={(n: any) =>
           `<div style="background:#0b1220;color:#e2e8f0;padding:8px 10px;border-radius:6px;border:1px solid #334155;font:11px/1.4 monospace;max-width:340px">
              <div style="color:${n.color};font-weight:600;margin-bottom:4px">${n.kind === "entity" ? "🏷️ " : ""}${n.kind} · ${n.id}</div>
